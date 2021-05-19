@@ -138,6 +138,7 @@ pub struct CollapsingHeader {
     label: Label,
     default_open: bool,
     id_source: Id,
+    rectangle: bool,
     enabled: bool,
 }
 
@@ -155,6 +156,7 @@ impl CollapsingHeader {
             label,
             default_open: false,
             id_source,
+            rectangle: true,
             enabled: true,
         }
     }
@@ -177,6 +179,12 @@ impl CollapsingHeader {
     /// Call `.text_style(style)` to change this.
     pub fn text_style(mut self, text_style: TextStyle) -> Self {
         self.label = self.label.text_style(text_style);
+        self
+    }
+
+    /// If you set this to `false`, the header of the `CollapsingHeader` will not have a rectangle around.
+    pub fn rectangle(mut self, rectangle: bool) -> Self {
+        self.rectangle = rectangle;
         self
     }
 
@@ -205,6 +213,7 @@ impl CollapsingHeader {
             label,
             default_open,
             id_source,
+            rectangle,
             enabled: _,
         } = self;
 
@@ -240,13 +249,15 @@ impl CollapsingHeader {
 
         let visuals = ui.style().interact(&header_response);
         let text_color = visuals.text_color();
-        ui.painter().add(Shape::Rect {
-            rect: header_response.rect.expand(visuals.expansion),
-            corner_radius: visuals.corner_radius,
-            fill: visuals.bg_fill,
-            stroke: visuals.bg_stroke,
-            // stroke: Default::default(),
-        });
+        if rectangle {
+            ui.painter().add(Shape::Rect {
+                rect: header_response.rect.expand(visuals.expansion),
+                corner_radius: visuals.corner_radius,
+                fill: visuals.bg_fill,
+                stroke: visuals.bg_stroke,
+                // stroke: Default::default(),
+            });
+        }
 
         {
             let (mut icon_rect, _) = ui.spacing().icon_rectangles(header_response.rect);
