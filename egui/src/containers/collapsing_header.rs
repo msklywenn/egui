@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
-use crate::{widgets::Label, *};
-use epaint::{Shape, TextStyle};
+use crate::*;
+use epaint::Shape;
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "persistence", derive(serde::Deserialize, serde::Serialize))]
@@ -135,7 +135,7 @@ pub(crate) fn paint_icon(ui: &mut Ui, openness: f32, response: &Response) {
 /// ui.collapsing("Heading", |ui| { ui.label("Contents"); });
 /// ```
 pub struct CollapsingHeader {
-    label: Label,
+    label: String,
     default_open: bool,
     id_source: Id,
     rectangle: bool,
@@ -150,8 +150,8 @@ impl CollapsingHeader {
     /// but if it changes or there are several `CollapsingHeader` with the same title
     /// you need to provide a unique id source with [`Self::id_source`].
     pub fn new(label: impl ToString) -> Self {
-        let label = Label::new(label).text_style(TextStyle::Button).wrap(false);
-        let id_source = Id::new(label.text());
+        let label = label.to_string();
+        let id_source = Id::new(label.clone());
         Self {
             label,
             default_open: false,
@@ -175,13 +175,6 @@ impl CollapsingHeader {
         self
     }
 
-    /// By default, the `CollapsingHeader` text style is `TextStyle::Button`.
-    /// Call `.text_style(style)` to change this.
-    pub fn text_style(mut self, text_style: TextStyle) -> Self {
-        self.label = self.label.text_style(text_style);
-        self
-    }
-
     /// If you set this to `false`, the header of the `CollapsingHeader` will not have a rectangle around.
     pub fn rectangle(mut self, rectangle: bool) -> Self {
         self.rectangle = rectangle;
@@ -199,12 +192,14 @@ impl CollapsingHeader {
 
 struct Prepared {
     id: Id,
+    icon_response: Response,
     header_response: Response,
+    rect: Rect,
     state: State,
 }
 
 impl CollapsingHeader {
-    fn begin(self, ui: &mut Ui) -> Prepared {
+    fn begin(self, ui: &mut Ui, header: impl FnOnce(&mut Ui) -> Response) -> Prepared {
         assert!(
             ui.layout().main_dir().is_vertical(),
             "Horizontal collapsing is unimplemented"
@@ -223,61 +218,61 @@ impl CollapsingHeader {
         let button_padding = ui.spacing().button_padding;
 
         let available = ui.available_rect_before_wrap_finite();
-        let text_pos = available.min + vec2(ui.spacing().indent, 0.0);
-        let galley = label.layout_width(ui, available.right() - text_pos.x);
-        let text_max_x = text_pos.x + galley.size.x;
-        let desired_width = text_max_x + button_padding.x - available.left();
-        let desired_width = desired_width.max(available.width());
+        let full_header_width = available.width();
+        let full_header_height = ui.fonts().row_height(TextStyle::Button);
 
-        let mut desired_size = vec2(desired_width, galley.size.y + 2.0 * button_padding.y);
-        desired_size = desired_size.at_least(ui.spacing().interact_size);
-        let (_, rect) = ui.allocate_space(desired_size);
+        let mut full_header_size = vec2(full_header_width, full_header_height);
+        full_header_size = full_header_size.at_least(ui.spacing().interact_size);
+        let (_, full_header_rect) = ui.allocate_space(full_header_size);
 
-        let mut header_response = ui.interact(rect, id, Sense::click());
-        let text_pos = pos2(
-            text_pos.x,
-            header_response.rect.center().y - galley.size.y / 2.0,
-        );
+        let (mut icon_rect, _) = ui.spacing().icon_rectangles(full_header_rect);
+        let icon_rect_interact = icon_rect.expand2(button_padding);
+        let mut icon_response = ui.interact(icon_rect_interact, id, Sense::click());
+
+        let header_ui_rect = full_header_rect;
+        let mut header_ui_rect = header_ui_rect.shrink2(button_padding);
+        header_ui_rect
+            .set_left(header_ui_rect.left() + ui.spacing().indent - button_padding.x);
 
         let mut state = State::from_memory_with_default_open(ui.ctx(), id, default_open);
-        if header_response.clicked() {
+        if icon_response.clicked() {
             state.toggle(ui);
-            header_response.mark_changed();
+            icon_response.mark_changed();
         }
-        header_response
-            .widget_info(|| WidgetInfo::labeled(WidgetType::CollapsingHeader, &galley.text));
+        icon_response
+            .widget_info(|| WidgetInfo::labeled(WidgetType::CollapsingHeader, label.clone()));
 
-        let visuals = ui.style().interact(&header_response);
-        let text_color = visuals.text_color();
+        let visuals = ui.style().interact(&icon_response);
         if rectangle {
             ui.painter().add(Shape::Rect {
-                rect: header_response.rect.expand(visuals.expansion),
+                rect: full_header_rect.expand(visuals.expansion),
                 corner_radius: visuals.corner_radius,
                 fill: visuals.bg_fill,
                 stroke: visuals.bg_stroke,
-                // stroke: Default::default(),
             });
         }
 
         {
-            let (mut icon_rect, _) = ui.spacing().icon_rectangles(header_response.rect);
             icon_rect.set_center(pos2(
-                header_response.rect.left() + ui.spacing().indent / 2.0,
-                header_response.rect.center().y,
+                icon_response.rect.left() + ui.spacing().indent / 2.0,
+                icon_response.rect.center().y,
             ));
             let icon_response = Response {
                 rect: icon_rect,
-                ..header_response.clone()
+                ..icon_response.clone()
             };
             let openness = state.openness(ui.ctx(), id);
             paint_icon(ui, openness, &icon_response);
         }
 
-        ui.painter().galley(text_pos, galley, text_color);
+        let mut header_ui = ui.child_ui(header_ui_rect, *ui.layout());
+        let header_response = header_ui.scope(header).inner;
 
         Prepared {
             id,
+            icon_response,
             header_response,
+            rect: full_header_rect,
             state,
         }
     }
@@ -287,6 +282,23 @@ impl CollapsingHeader {
         ui: &mut Ui,
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> CollapsingResponse<R> {
+        let label = self.label.clone();
+        self.show_with_custom_header(
+            ui,
+            |ui| {
+                let label = Label::from(label).text_style(TextStyle::Button);
+                label.ui(ui)
+            },
+            add_contents,
+        )
+    }
+
+    pub fn show_with_custom_header<R>(
+        self,
+        ui: &mut Ui,
+        header: impl FnOnce(&mut Ui) -> Response,
+        add_contents: impl FnOnce(&mut Ui) -> R,
+    ) -> CollapsingResponse<R> {
         // Make sure contents are bellow header,
         // and make sure it is one unit (necessary for putting a `CollapsingHeader` in a grid).
         ui.vertical(|ui| {
@@ -294,14 +306,16 @@ impl CollapsingHeader {
 
             let Prepared {
                 id,
+                icon_response,
                 header_response,
+                rect,
                 mut state,
-            } = self.begin(ui);
+            } = self.begin(ui, header);
 
             let ret_response = state.add_contents(ui, id, |ui| {
                 ui.indent(id, |ui| {
                     // make as wide as the header:
-                    ui.expand_to_include_x(header_response.rect.right());
+                    ui.expand_to_include_x(rect.right());
                     add_contents(ui)
                 })
                 .inner
@@ -310,12 +324,14 @@ impl CollapsingHeader {
 
             if let Some(ret_response) = ret_response {
                 CollapsingResponse {
+                    icon_response,
                     header_response,
                     body_response: Some(ret_response.response),
                     body_returned: Some(ret_response.inner),
                 }
             } else {
                 CollapsingResponse {
+                    icon_response,
                     header_response,
                     body_response: None,
                     body_returned: None,
@@ -329,6 +345,7 @@ impl CollapsingHeader {
 /// The response from showing a [`CollapsingHeader`].
 pub struct CollapsingResponse<R> {
     pub header_response: Response,
+    pub icon_response: Response,
     /// None iff collapsed.
     pub body_response: Option<Response>,
     /// None iff collapsed.
