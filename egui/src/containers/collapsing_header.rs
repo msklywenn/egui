@@ -199,7 +199,11 @@ struct Prepared {
 }
 
 impl CollapsingHeader {
-    fn begin(self, ui: &mut Ui, header: impl FnOnce(&mut Ui) -> Response) -> Prepared {
+    fn begin<R, H: FnOnce(&mut Ui) -> R>(
+        self,
+        ui: &mut Ui,
+        header: impl FnOnce(&mut Ui) -> (Response, H),
+    ) -> (Prepared, H) {
         assert!(
             ui.layout().main_dir().is_vertical(),
             "Horizontal collapsing is unimplemented"
@@ -231,8 +235,7 @@ impl CollapsingHeader {
 
         let header_ui_rect = full_header_rect;
         let mut header_ui_rect = header_ui_rect.shrink2(button_padding);
-        header_ui_rect
-            .set_left(header_ui_rect.left() + ui.spacing().indent - button_padding.x);
+        header_ui_rect.set_left(header_ui_rect.left() + ui.spacing().indent - button_padding.x);
 
         let mut state = State::from_memory_with_default_open(ui.ctx(), id, default_open);
         if icon_response.clicked() {
@@ -266,15 +269,18 @@ impl CollapsingHeader {
         }
 
         let mut header_ui = ui.child_ui(header_ui_rect, *ui.layout());
-        let header_response = header_ui.scope(header).inner;
+        let (header_response, add_contents) = header_ui.scope(header).inner;
 
-        Prepared {
-            id,
-            icon_response,
-            header_response,
-            rect: full_header_rect,
-            state,
-        }
+        (
+            Prepared {
+                id,
+                icon_response,
+                header_response,
+                rect: full_header_rect,
+                state,
+            },
+            add_contents,
+        )
     }
 
     pub fn show<R>(
@@ -283,34 +289,29 @@ impl CollapsingHeader {
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> CollapsingResponse<R> {
         let label = self.label.clone();
-        self.show_with_custom_header(
-            ui,
-            |ui| {
-                let label = Label::from(label).text_style(TextStyle::Button);
-                label.ui(ui)
-            },
-            add_contents,
-        )
+        self.show_with_custom_header(ui, |ui| {
+            let label = Label::from(label).text_style(TextStyle::Button);
+            (label.ui(ui), add_contents)
+        })
     }
 
-    pub fn show_with_custom_header<R>(
+    pub fn show_with_custom_header<R, H: FnOnce(&mut Ui) -> R>(
         self,
         ui: &mut Ui,
-        header: impl FnOnce(&mut Ui) -> Response,
-        add_contents: impl FnOnce(&mut Ui) -> R,
+        header_then_contents: impl FnOnce(&mut Ui) -> (Response, H),
     ) -> CollapsingResponse<R> {
         // Make sure contents are bellow header,
         // and make sure it is one unit (necessary for putting a `CollapsingHeader` in a grid).
         ui.vertical(|ui| {
             ui.set_enabled(self.enabled);
 
-            let Prepared {
+            let (Prepared {
                 id,
                 icon_response,
                 header_response,
                 rect,
                 mut state,
-            } = self.begin(ui, header);
+            }, add_contents) = self.begin(ui, header_then_contents);
 
             let ret_response = state.add_contents(ui, id, |ui| {
                 ui.indent(id, |ui| {
